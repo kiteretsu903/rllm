@@ -642,7 +642,10 @@ class UnifiedTrainer:
                             raise result
                     coordinator.raise_if_task_failed()
             finally:
-                pbar.close()
+                try:
+                    await buffer.aclose()
+                finally:
+                    pbar.close()
 
     async def _generation_loop(
         self,
