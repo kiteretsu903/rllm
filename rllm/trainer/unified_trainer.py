@@ -614,17 +614,35 @@ class UnifiedTrainer:
         pbar = tqdm(total=total_tasks, desc="Tasks", unit="task")
         buffer._pbar = pbar
 
+        gen_task = asyncio.create_task(self._generation_loop(trainer_state, buffer, coordinator))
+        train_task = asyncio.create_task(self._training_loop(trainer_state, buffer, coordinator, aggregator))
+        error_task = asyncio.create_task(coordinator.wait_for_task_error())
+        tasks = (gen_task, train_task, error_task)
+        completed = False
         try:
-            gen_task = asyncio.create_task(self._generation_loop(trainer_state, buffer, coordinator))
-            await self._training_loop(trainer_state, buffer, coordinator, aggregator)
-            if not gen_task.done():
-                gen_task.cancel()
-                try:
-                    await gen_task
-                except asyncio.CancelledError:
-                    pass
+            pending = set(tasks)
+            while pending:
+                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                for task in tasks:
+                    if task in done:
+                        task.result()
+                if train_task in done:
+                    break
+            completed = True
         finally:
-            pbar.close()
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            rollouts = coordinator.cancel_tracked_tasks()
+            try:
+                results = await asyncio.gather(*tasks, *rollouts, return_exceptions=True)
+                if completed:
+                    for result in results:
+                        if isinstance(result, Exception):
+                            raise result
+                    coordinator.raise_if_task_failed()
+            finally:
+                pbar.close()
 
     async def _generation_loop(
         self,
