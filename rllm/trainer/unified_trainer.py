@@ -833,8 +833,13 @@ class UnifiedTrainer:
             coordinator.pause_generation()
             await coordinator.wait_for_drain()
 
+        previous_version = trainer_state.weight_version
         trainer_state.weight_version = coordinator.weight_version + 1
-        await self.backend.on_policy_updated(trainer_state)
+        try:
+            await self.backend.on_policy_updated(trainer_state)
+        except BaseException:
+            trainer_state.weight_version = previous_version
+            raise
         if rollout_engine is not None:
             rollout_engine.weight_version = trainer_state.weight_version
         if self._gateway is not None:
